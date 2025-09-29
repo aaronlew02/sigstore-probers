@@ -25,9 +25,7 @@ jobs:
       issues: write
     with:
       enable_staging: true
-      rekor_url: "https://rekor.sigstage.dev"
-      fulcio_url: "https://fulcio.sigstage.dev"
-      oidc_url: "https://oauth2.sigstage.dev/auth"
+      rekor_v1_url: "https://rekor.sigstage.dev"
       tuf_repo: "https://tuf-repo-cdn.sigstage.dev"
       tuf_preprod_repo: "https://sigstore.github.io/root-signing-staging"
       tuf_root_path: ".github/assets/sigstage.root.json"

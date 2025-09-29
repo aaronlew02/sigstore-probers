@@ -7,21 +7,16 @@ on:
         description: 'Integration key for PagerDuty'
         required: true
     inputs:
-      rekor_url:
+      rekor_v1_url:
         required: false
         type: string
         default: 'https://rekor.sigstore.dev'
-        description: 'Rekor URL'
-      fulcio_url:
+        description: 'Rekor v1 URL'
+      rekor_v2_url:
         required: false
         type: string
-        default: 'https://fulcio.sigstore.dev'
-        description: 'Fulcio URL'
-      oidc_url:
-        required: false
-        type: string
-        default: 'https://oauth2.sigstore.dev/auth'
-        description: 'OIDC URL'
+        default: 'https://log2025-alpha3.rekor.sigstage.dev'
+        description: 'Rekor v2 URL'
       enable_staging:
         required: false
         type: boolean
@@ -148,7 +143,7 @@ jobs:
       GITHUB_RUN_ID: ${{ github.run_id }}
       GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
       IMAGE: localhost:1338/image:${{ github.sha }}-${{ github.run_id }}
-      REKOR_SERVER: ${{ inputs.rekor_url }}
+      REKOR_SERVER: ${{ inputs.rekor_v1_url }}
       IDENTITY_REGEX: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/reusable-prober.yml@refs/.*
     runs-on: ubuntu-latest
     outputs:
@@ -225,8 +220,8 @@ jobs:
       - name: Sign and verify the image with preprod TUF
         if: ${{ inputs.enable_staging == false }}
         run: |
-          cosign sign --yes ${IMAGE} --rekor-url  ${{ inputs.rekor_url }} --fulcio-url ${{ inputs.fulcio_url }} --oidc-issuer ${{ inputs.oidc_url }} --oidc-provider github-actions
-          cosign verify ${IMAGE} --rekor-url  ${{ inputs.rekor_url }} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
+          cosign sign --yes ${IMAGE} --use-signing-config --oidc-provider github-actions --new-bundle-format
+          cosign verify ${IMAGE} --rekor-url  ${{ inputs.rekor_v1_url }} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
 
       - name: Remove preprod TUF
         run: |
@@ -247,21 +242,19 @@ jobs:
 
       - name: Sign and verify the image
         run: |
-          cosign sign --yes ${IMAGE} --rekor-url  ${{ inputs.rekor_url }} --fulcio-url ${{ inputs.fulcio_url }} --oidc-issuer ${{ inputs.oidc_url }} --oidc-provider github-actions
-          cosign verify ${IMAGE} --rekor-url  ${{ inputs.rekor_url }} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
-
+          cosign sign --yes ${IMAGE} --use-signing-config --oidc-provider github-actions --new-bundle-format
+          cosign verify ${IMAGE} --rekor-url  ${{ inputs.rekor_v1_url }} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
       - name: Generate and upload attestation
         run: |
-          cosign attest --predicate ./prober/attestation.json --type slsaprovenance --rekor-url  ${{ inputs.rekor_url }} --fulcio-url ${{ inputs.fulcio_url }} --oidc-issuer ${{ inputs.oidc_url }} ${IMAGE}
-          cosign verify-attestation --rekor-url  ${{ inputs.rekor_url }} --type=slsaprovenance ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
-
+          cosign attest --predicate ./prober/attestation.json --type slsaprovenance --use-signing-config ${IMAGE}
+          cosign verify-attestation --rekor-url  ${{ inputs.rekor_v1_url }} --type=slsaprovenance ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX"
       - name: Read entries from all Rekor shards
         run: |
           set -e
 
           # get shard information from Rekor
-          response=$(curl -fs ${{ inputs.rekor_url }}/api/v1/log) || {
-            echo "Fetching loginfo from ${{ inputs.rekor_url }} failed, exiting..."; exit 1;
+          response=$(curl -fs ${{ inputs.rekor_v1_url }}/api/v1/log) || {
+            echo "Fetching loginfo from ${{ inputs.rekor_v1_url }} failed, exiting..."; exit 1;
           }
 
           # shard_sizes[0] is the size of the active shard, shard_sizes [1...n] are the sizes of the inactive shards
@@ -289,8 +282,8 @@ jobs:
           fi
 
           for index in "${result[@]}"; do
-            echo -n "Fetching index $index from ${{ inputs.rekor_url }} ... "
-            entry=$(curl -fs ${{ inputs.rekor_url }}/api/v1/log/entries?logIndex=$index) || {
+            echo -n "Fetching index $index from ${{ inputs.rekor_v1_url }} ... "
+            entry=$(curl -fs ${{ inputs.rekor_v1_url }}/api/v1/log/entries?logIndex=$index) || {
               echo "failed!"; exit 1;
             }
             echo
