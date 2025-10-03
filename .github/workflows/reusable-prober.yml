@@ -131,7 +131,7 @@ jobs:
           echo "root_state=good" >> $GITHUB_OUTPUT
           if [ "${{ job.status }}" == 'failure' ]; then echo "root_state=failure" >> $GITHUB_OUTPUT; fi
 
-  rekor-fulcio-e2e:
+  rekor-v1-fulcio-e2e:
     timeout-minutes: 10
     permissions:
       id-token: write
@@ -146,7 +146,7 @@ jobs:
       IDENTITY_REGEX: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/reusable-prober.yml@refs/.*
     runs-on: ubuntu-latest
     outputs:
-      rekor_fulcio_e2e: ${{ steps.msg.outputs.rekor_fulcio_e2e }}
+      rekor_v1_fulcio_e2e: ${{ steps.msg.outputs.rekor_v1_fulcio_e2e }}
       skip_pagerduty: ${{ steps.set-skip-pagerduty.outputs.skip_pagerduty }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -221,7 +221,7 @@ jobs:
       - name: Sign and verify the image with preprod TUF
         if: ${{ inputs.enable_staging == false }}
         run: |
-          cosign sign --yes ${IMAGE} --use-signing-config --oidc-provider github-actions --new-bundle-format
+          cosign sign --yes ${IMAGE} --use-signing-config --rekor-url ${{ inputs.rekor_v1_url }} --oidc-provider github-actions --new-bundle-format
           cosign verify ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX" --new-bundle-format
 
       - name: Remove preprod TUF
@@ -243,7 +243,7 @@ jobs:
 
       - name: Sign and verify the image
         run: |
-          cosign sign --yes ${IMAGE} --use-signing-config --oidc-provider github-actions --new-bundle-format
+          cosign sign --yes ${IMAGE} --use-signing-config --rekor-url ${{ inputs.rekor_v1_url }} --oidc-provider github-actions --new-bundle-format
           cosign verify ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX" --new-bundle-format
       - name: Generate and upload attestation
         run: |
@@ -295,8 +295,135 @@ jobs:
         id: msg
         if: success() || failure()
         run: |
-          echo "rekor_fulcio_e2e=good" >> $GITHUB_OUTPUT
-          if [ "${{ job.status }}" == 'failure' ]; then echo "rekor_fulcio_e2e=failure" >> $GITHUB_OUTPUT; fi
+          echo "rekor_v1_fulcio_e2e=good" >> $GITHUB_OUTPUT
+          if [ "${{ job.status }}" == 'failure' ]; then echo "rekor_v1_fulcio_e2e=failure" >> $GITHUB_OUTPUT; fi
+
+  rekor-v2-fulcio-e2e:
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      COSIGN_YES: "true"
+      REKOR_URL: ${{ inputs.rekor_v2_url }}
+      GIT_HASH: ${{ github.sha }}
+      GIT_VERSION: unstable
+      GITHUB_RUN_ID: ${{ github.run_id }}
+      GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+      IMAGE: localhost:1338/image:${{ github.sha }}-${{ github.run_id }}
+      IDENTITY_REGEX: ${{ github.server_url }}/${{ github.repository }}/.github/workflows/reusable-prober.yml@refs/.*
+    runs-on: ubuntu-latest
+    outputs:
+      rekor_v2_fulcio_e2e: ${{ steps.msg.outputs.rekor_v2_fulcio_e2e }}
+      skip_pagerduty: ${{ steps.set-skip-pagerduty.outputs.skip_pagerduty }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      # This server is often down, resulting in a lot of flaky probers
+      # If the server is down, and this step fails, we don't alert PagerDuty
+      - name: Confirm Github OIDC Server is Available
+        continue-on-error: true
+        run: |
+          curl -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" $ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore
+
+      # Since the server is down, we want to ignore the failure in this workflow
+      # and skip paging PagerDuty
+      - name: Set skip_pagerduty outputs
+        id: set-skip-pagerduty
+        if: failure()
+        run: |
+          echo "skip_pagerduty=true" >> $GITHUB_OUTPUT
+
+      - name: Extract crane binary
+        run: |
+          docker pull ghcr.io/sigstore/sigstore-probers:latest
+          # the last argument in the next command is not used, it is required because the container doesn't have a default command
+          docker create --name binaries ghcr.io/sigstore/sigstore-probers /usr/local/bin/crane
+          docker cp binaries:/usr/local/bin/crane /usr/local/bin/
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3.10.0
+
+      # Setup the registry on port 1338
+      - run: |
+          PORT=1338 crane registry serve &
+
+      # this pulls a container from GHCR to avoid docker.io rate limiting and minimize network flake risk
+      - name: Build and copy a container image
+        run: |
+          docker pull ghcr.io/linuxcontainers/alpine
+          docker tag ghcr.io/linuxcontainers/alpine ${IMAGE}
+          docker push ${IMAGE}
+
+      # START: PREPRODUCTION VERIFICATION:
+      #   * "Upgrade" cosign from prod to preprod TUF; sign and verify
+      #   * Do not run this test for staging TUF
+      # TODO: Create a matrix (https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs)
+      #       to reduce duplication
+
+      - name: Initialize prod TUF root
+        if: ${{ inputs.enable_staging == false }}
+        run: |
+          for i in {1..5}
+          do
+            if cosign initialize --mirror=${{ inputs.tuf_repo }} --root=${{ inputs.tuf_root_path }}; then
+              echo "Successfully initialized" && exit 0
+            else
+              echo "Failed to initialize" && sleep 10
+            fi
+          done
+
+      - name: Initialize preprod TUF root
+        if: ${{ inputs.enable_staging == false }}
+        run: |
+          for i in {1..5}
+          do
+            if cosign initialize --mirror=${{ inputs.tuf_preprod_repo }} --root=${{ inputs.tuf_root_path }}; then
+              echo "Successfully initialized" && exit 0
+            else
+              echo "Failed to initialize" && sleep 10
+            fi
+          done
+
+      - name: Sign and verify the image with preprod TUF
+        if: ${{ inputs.enable_staging == false }}
+        run: |
+          cosign sign --yes ${IMAGE} --use-signing-config --rekor-url ${{ inputs.rekor_v2_url }} --oidc-provider github-actions --new-bundle-format
+          cosign verify ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX" --new-bundle-format
+
+      - name: Remove preprod TUF
+        run: |
+          rm -rf ~/.sigstore
+      # END: PREPRODUCTION VERIFICATION
+
+      - name: Initialize TUF root
+        run: |
+          for i in {1..5}
+          do
+            if cosign initialize --mirror=${{ inputs.tuf_repo }} --root=${{ inputs.tuf_root_path }}; then
+              echo "Successfully initialized" && exit 0
+            else
+              echo "Failed to initialize" && sleep 10
+            fi
+          done
+          exit 1
+
+      - name: Sign and verify the image
+        run: |
+          cosign sign --yes ${IMAGE} --use-signing-config --rekor-url ${{ inputs.rekor_v2_url }} --oidc-provider github-actions --new-bundle-format
+          cosign verify ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX" --new-bundle-format
+
+      - name: Generate and upload attestation
+        run: |
+          cosign attest --predicate ./prober/attestation.json --type slsaprovenance --use-signing-config ${IMAGE} --new-bundle-format
+          cosign verify-attestation --type=slsaprovenance ${IMAGE} --certificate-oidc-issuer=https://token.actions.githubusercontent.com --certificate-identity-regexp="$IDENTITY_REGEX" --new-bundle-format
+
+      - name: Set messages
+        id: msg
+        if: success() || failure()
+        run: |
+          echo "rekor_v2_fulcio_e2e=good" >> $GITHUB_OUTPUT
+          if [ "${{ job.status }}" == 'failure' ]; then echo "rekor_v2_fulcio_e2e=failure" >> $GITHUB_OUTPUT; fi
 
   compute-summary-msg:
     runs-on: ubuntu-latest
@@ -319,8 +446,8 @@ jobs:
           fi
 
   pagerduty-notification:
-    if: github.event.inputs.triggerPagerDutyTest=='true' || (failure() && needs.rekor-fulcio-e2e.outputs.skip_pagerduty != 'true')
-    needs: [sigstore-probe, root-probe, rekor-fulcio-e2e, compute-summary-msg]
+    if: github.event.inputs.triggerPagerDutyTest=='true' || (failure() && needs.rekor-v1-fulcio-e2e.outputs.skip_pagerduty != 'true')
+    needs: [sigstore-probe, root-probe, rekor-v1-fulcio-e2e, rekor-v2-fulcio-e2e, compute-summary-msg]
     uses: ./.github/workflows/reusable-pager.yml
     permissions:
       contents: read
@@ -338,7 +465,8 @@ jobs:
           "Commit": "${{ github.sha }}",
           "Prober": "${{ needs.sigstore-probe.outputs.sigstore_probe }}",
           "GCS Root": "${{ needs.root-probe.outputs.root_state }}",
-          "Rekor Fulcio E2E Test": "${{ needs.rekor-fulcio-e2e.outputs.rekor_fulcio_e2e }}"
+          "Rekor v1 Fulcio E2E Test": "${{ needs.rekor-v1-fulcio-e2e.outputs.rekor_v1_fulcio_e2e }}",
+          "Rekor v2 Fulcio E2E Test": "${{ needs.rekor-v2-fulcio-e2e.outputs.rekor_v2_fulcio_e2e }}"
         }
       links: >
         [
@@ -353,9 +481,9 @@ jobs:
         ]
 
   github-issue:
-    if: always() && (needs.sigstore-probe.result == 'failure' || needs.root-probe.result == 'failure' || needs.rekor-fulcio-e2e.result == 'failure')
+    if: always() && (needs.sigstore-probe.result == 'failure' || needs.root-probe.result == 'failure' || needs.rekor-v1-fulcio-e2e.result == 'failure' || needs.rekor-v2-fulcio-e2e.result == 'failure')
     runs-on: ubuntu-latest
-    needs: [sigstore-probe, root-probe, rekor-fulcio-e2e, compute-summary-msg]
+    needs: [sigstore-probe, root-probe, rekor-v1-fulcio-e2e, rekor-v2-fulcio-e2e, compute-summary-msg]
     permissions:
       issues: write
     steps:
@@ -368,5 +496,6 @@ jobs:
           Commit: ${{ github.sha }}
           Prober: ${{ needs.sigstore-probe.outputs.sigstore_probe }}
           GCS Root: ${{ needs.root-probe.outputs.root_state }}
-          Rekor Fulcio E2E Test: ${{ needs.rekor-fulcio-e2e.outputs.rekor_fulcio_e2e }}
+          Rekor v1 Fulcio E2E Test: ${{ needs.rekor-v1-fulcio-e2e.outputs.rekor_v1_fulcio_e2e }}
+          Rekor v2 Fulcio E2E Test: ${{ needs.rekor-v2-fulcio-e2e.outputs.rekor_v2_fulcio_e2e }}
           EOF
