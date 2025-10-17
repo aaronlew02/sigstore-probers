@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       rekor_v1_staging: ${{ steps.rekor_v1_staging.outputs.rekor_v1_staging }}
-      # rekor_v2_staging: ${{ steps.rekor_v2_staging.outputs.rekor_v2_staging }}
+      rekor_v2_staging: ${{ steps.rekor_v2_staging.outputs.rekor_v2_staging }}
       fulcio_staging: ${{ steps.fulcio_staging.outputs.fulcio_staging }}
       tsa_staging: ${{ steps.tsa_staging.outputs.tsa_staging }}
       rekor_v1_prod: ${{ steps.rekor_v1_prod.outputs.rekor_v1_prod }}
@@ -41,13 +41,12 @@ jobs:
         run: |
           echo "rekor_v1_staging=success" >> $GITHUB_OUTPUT
           rate-limiting --url https://rekor.sigstage.dev/api/v1/log || echo "rekor_v1_staging=failed" >> $GITHUB_OUTPUT
-      # TODO(#538): Test Rekor v2 rate limiting when load testing is complete
-      # - name: Rate Limit Rekor v2 Staging
-        # id: rekor_v2_staging
-        # continue-on-error: true
-        # run: |
-          # echo "rekor_v2_staging=success" >> $GITHUB_OUTPUT
-          # rate-limiting --url https://log2025-alpha2.rekor.sigstage.dev/healthz || echo "rekor_v2_staging=failed" >> $GITHUB_OUTPUT
+      - name: Rate Limit Rekor v2 Staging
+        id: rekor_v2_staging
+        continue-on-error: true
+        run: |
+          echo "rekor_v2_staging=success" >> $GITHUB_OUTPUT
+          rate-limiting --url https://log2025-alpha2.rekor.sigstage.dev/healthz || echo "rekor_v2_staging=failed" >> $GITHUB_OUTPUT
       - name: Rate Limit Fulcio Staging
         id: fulcio_staging
         continue-on-error: true
@@ -97,6 +96,7 @@ jobs:
           "Commit": "${{ github.sha }}",
           "Rekor v1 Staging": "${{ needs.rate-limiting.outputs.rekor_v1_staging }}",
           "Rekor v1 Prod": "${{ needs.rate-limiting.outputs.rekor_v1_prod }}",
+          "Rekor v2 Staging": "${{ needs.rate-limiting.outputs.rekor_v2_staging }}",
           "Fulcio Staging": "${{ needs.rate-limiting.outputs.fulcio_staging }}",
           "Fulcio Prod": "${{ needs.rate-limiting.outputs.fulcio_prod }}",
           "Timestamp Staging": "${{ needs.rate-limiting.outputs.tsa_staging }}"
