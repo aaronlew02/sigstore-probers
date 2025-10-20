@@ -183,10 +183,11 @@ jobs:
           docker pull ghcr.io/sigstore/sigstore-probers:latest
           # the last argument in the next command is not used, it is required because the container doesn't have a default command
           docker create --name binaries ghcr.io/sigstore/sigstore-probers /usr/local/bin/crane
+          docker cp binaries:/usr/local/bin/cosign /usr/local/bin/
           docker cp binaries:/usr/local/bin/crane /usr/local/bin/
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3.10.0
+      - name: Display cosign version
+        run: cosign version
 
       # Setup the registry on port 1338
       - run: |
