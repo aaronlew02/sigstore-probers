@@ -181,8 +181,8 @@ func rateLimit(url string) error {
 	if errCount > 0 {
 		fmt.Printf("%d out of %d requests had connection errors\n", errCount, limit)
 	}
-	// if !rateLimited.Load() {
-	return fmt.Errorf("no 429 status code was received, rate limiting may not have worked")
-	// }
-	// return nil
+	if !rateLimited.Load() {
+		return fmt.Errorf("no 429 status code was received, rate limiting may not have worked")
+	}
+	return nil
 }
