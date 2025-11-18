@@ -37,11 +37,17 @@ jobs:
       - name: Run Rate Limiting Prober for ${{ matrix.env }}
         id: prober
         run: |
-          PROBER_OUTPUT=$(rate-limiting ${{ matrix.env == 'staging' && '--staging' }} 2>&1)
+          PROBER_OUTPUT_FILE=$(mktemp)
+          set +e
+          rate-limiting ${{ matrix.env == 'staging' && '--staging' }} &> "${PROBER_OUTPUT_FILE}"
+          EXIT_CODE=$?
+          set -e
+          PROBER_OUTPUT=$(cat "${PROBER_OUTPUT_FILE}")
           echo "${PROBER_OUTPUT}"
           echo "summary<<EOF" >> $GITHUB_OUTPUT
           echo "${PROBER_OUTPUT}" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
+          exit $EXIT_CODE
 
   process-results:
     if: always()
@@ -53,6 +59,8 @@ jobs:
     steps:
       - name: Aggregate matrix results
         run: echo "Aggregating results from the rate-limiting matrix."
+      - name: Print results
+        run: echo '${{ toJSON(needs.rate-limiting) }}'
 
   pagerduty-notification:
     if: github.event.inputs.triggerPagerDutyTest=='true' || (needs.process-results.outputs.overall_result == 'failure')
